@@ -85,12 +85,22 @@ PYTHONPATH=src python -m tools.run_report_suite --base-config configs/mvp.yaml -
 
 ## UML Diagrams
 
-You already have PlantUML source files in `umls/`.
+The UML/architecture visuals below summarize the system from different perspectives.
 
-When you add UML images, place them in this folder (for example `umls/images/`) and reference them here, e.g.:
+### 1) Runtime Architecture
 
-- `runtime_architecture.png`
-- `runtime_architecture_detailed.png`
-- `per_frame_visualization_sequence_monocular.png`
-- `scan_pipeline_component_academic.png`
+![Runtime Architecture](umls/images/Architecture_big.png)
 
+This diagram shows the high-level runtime flow: video input, pose/face processing, analytics, and output artifacts (videos + CSVs). It is useful for quickly understanding the main modules and how data moves across them.
+
+### 2) Pipeline Components
+
+![Pipeline Components](umls/images/pipeline.png)
+
+This component-level view focuses on the scan-analysis pipeline internals, including detector outputs, enrichment/fusion steps, and scanner logic. It helps explain which subsystem is responsible for each transformation in the head-scan metric path.
+
+### 3) Per-Frame Visualization Sequence
+
+![Per-Frame Visualization Sequence](umls/images/Visualization.png)
+
+This sequence diagram illustrates what happens within a single frame cycle, from frame acquisition to rendering overlays/stickman outputs. It is useful for debugging frame-level timing and understanding rendering order.
