@@ -1,0 +1,404 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue
+}
+
+\lstdefinestyle{bashstyle}{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  columns=fullflexible,
+  frame=single,
+  backgroundcolor=\color{gray!8}
+}
+
+\title{Independent Study Report\\
+Monocular 3D Human Pose and Head-Scan Event Detection}
+\author{Andreas Alexopoulos}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report presents the end-to-end development of a modular computer vision pipeline for scan-event analysis in football-relevant movement video. The study begins with a straightforward single-camera baseline and progresses toward a robust, versioned system that combines pose extraction, 3D visualization, state-based event detection, and reproducible experimentation. The implementation includes three scanner generations, V1 through V3, each introducing a clear methodological improvement. The final framework produces synchronized artifacts for analysis, including annotated videos, 3D stickman videos, keypoint CSV files, scan-metrics CSV files, versioned run configurations, and structured logs. In addition to algorithmic development, this work establishes an evaluation and reporting workflow that supports direct comparison across scanner versions.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+This independent study focuses on automatic detection of head-scanning behavior from football-relevant movement video. In practical terms, a scan is a purposeful head movement that helps a player sample surrounding information before a decision. The goal of the project is to convert that qualitative coaching concept into a measurable and reproducible computer-vision signal, using a pipeline that can run on ordinary monocular footage rather than specialized motion-capture infrastructure.
+
+From a technical perspective, the task is not a simple pose-estimation problem. Head orientation cues are entangled with torso rotation, camera viewpoint, subject distance, temporary landmark dropout, and frame-level jitter. A detector based only on raw nose displacement quickly becomes unstable under these conditions. For that reason, the project treats scan detection as a stateful temporal inference problem built on top of pose trajectories, with explicit signal conditioning, transition logic, and quality-aware gating.
+
+The contribution of this work is an end-to-end, modular system that starts from raw video and produces synchronized analytical artifacts: annotated overlay video, 3D stickman visualization, keypoint and metrics CSV files, versioned experiment outputs, and evaluation logs. Methodologically, the implementation progresses through three scanner generations, from a minimal baseline to a torso-frame, quality-aware, adaptive detector. This incremental structure makes the study auditable: each design choice can be inspected in code, visualized in diagnostics, and compared in a reproducible run suite.
+
+\section{Project Goal and Research Framing}
+The primary project objective was to implement a complete monocular baseline that can be executed end to end on real video clips and can be inspected both visually and numerically. In implementation terms, this goal has been achieved: the current pipeline reads an input video, runs frame-wise pose inference, optionally augments the representation with Face Mesh and virtual body enrichment points, computes scan-state signals, and writes synchronized artifacts including overlay video, 3D stickman video, side-by-side composite video, keypoint CSV, and scan-metrics CSV. The same orchestration layer also supports a stereo branch for future work, but the core analysis in this report remains the single-camera path.
+
+The research framing of the implementation is intentionally comparative rather than monolithic. Instead of building one detector with fixed assumptions, the project implements three scanner generations under a shared interface. V1 provides an interpretable baseline, V2 introduces compensation and multi-cue smoothing, and V3 adds torso-frame geometry, quality gating, adaptive thresholds, and stricter event validation. Because these versions are all runnable within the same pipeline and produce the same artifact types, improvements can be analyzed as controlled changes in modeling assumptions rather than as isolated prototypes.
+
+To make this comparison reproducible, the implementation includes experiment automation and evaluation tooling as first-class components. The report-suite runner executes multiple versions across one or more clips, stores frozen per-run configurations, captures logs, writes a global summary CSV, and generates ready-to-run viewer commands. A dedicated event-evaluation script then compares predicted scan events with annotated ground truth under frame tolerance and reports precision-recall metrics. This means the project output is not only a set of videos, but a repeatable experimental framework that supports methodological claims in the final report.
+
+\section{System Architecture}
+The architecture is organized as a configuration-driven processing graph with a single orchestration entry point in \texttt{src/main.py}. At runtime, the pipeline begins by loading YAML configuration through \texttt{src/utils/io.py}, then dispatches into one of two execution branches. If \texttt{stereo.enabled} is true, control is transferred to the stereo branch, where two synchronized video streams are processed independently with MediaPipe Pose and then fused through geometric triangulation in \texttt{src/triangulation/stereo.py}. If stereo is not enabled, the default monocular branch processes one stream and supports optional monocular world-landmark output through \texttt{pose\_world\_landmarks}.
+
+In the monocular branch, each frame passes through a fixed sequence. Pose landmarks are inferred by \texttt{src/pose/mediapipe\_pose.py}. Optional face landmarks are inferred by \texttt{src/pose/mediapipe\_face.py}, typically using a pose-derived head ROI with full-frame fallback when ROI inference fails. The resulting arrays are then merged and can be further densified using virtual interpolated body points from \texttt{src/pose/body\_points.py}. This merged representation is the common substrate for 3D stickman rendering and for the more advanced scan detectors. The V1 scanner reads pose-only landmarks, while V2 and V3 can consume the combined pose-plus-face stream, enabling richer head cues when available.
+
+Visualization and analytics are intentionally separated even though they run in the same per-frame loop. Two-dimensional overlay drawing is handled in \texttt{src/viz/draw\_skeleton.py} using MediaPipe pose connections and visibility gating. Three-dimensional rendering is handled in \texttt{src/viz/stickman3d.py}, which exposes camera and style controls such as elevation, azimuth, axis limits, DPI, and horizontal scaling. The scan analytics layer in \texttt{src/analytics/head\_scan.py} operates as a parallel consumer of the same frame representation and returns structured diagnostics, which are rendered as HUD elements on the stickman output and also written to metrics CSV files.
+
+A key architectural decision is that all core modules exchange shape-stable numeric contracts. Pose and face wrappers always return fixed-size arrays with \(\mathrm{NaN}\) placeholders when detection fails, instead of changing output shapes across frames. This simplifies orchestration logic because visualization, scanner updates, and CSV export can run on every frame without branch-heavy error handling. It also makes the dataset export deterministic: each run produces consistent columns and per-frame records, even in difficult frames with partial dropout.
+
+Output writing is treated as part of the architecture rather than an afterthought. The IO layer writes keypoints and scanner metrics as separate CSV artifacts, while video writers produce overlay, stickman, and optional side-by-side composites. The same structure is reused by \texttt{src/tools/run\_report\_suite.py}, which clones configurations per version, executes V1/V2/V3 sweeps, stores logs and frozen configs, and generates viewer launch commands. This closes the loop between implementation and evaluation: model changes in scanner logic propagate through a reproducible artifact pipeline.
+
+\subsection{PlantUML Architecture Diagram}
+The following PlantUML source captures the implemented control flow and module boundaries and can be rendered directly as a system diagram.
+
+\begin{lstlisting}
+@startuml
+title PitchPose Runtime Architecture
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+actor User
+artifact "configs/mvp.yaml" as CFG
+
+component "src/main.py\nrun_pipeline()" as MAIN
+component "src/utils/io.py\nload/open/write" as IO
+component "src/pose/mediapipe_pose.py" as POSE
+component "src/pose/mediapipe_face.py" as FACE
+component "src/pose/body_points.py" as BODY
+component "src/analytics/head_scan.py\nV1/V2/V3" as SCAN
+component "src/viz/draw_skeleton.py" as DRAW2D
+component "src/viz/stickman3d.py" as DRAW3D
+component "src/triangulation/stereo.py" as STEREO
+component "src/tools/run_report_suite.py" as SUITE
+component "src/viewers/stickman_viewer.py" as VIEWER
+
+database "overlay.mp4\nstickman.mp4\nside_by_side.mp4" as VID
+database "keypoints.csv\nscan_metrics.csv" as CSV
+database "summary.csv\nlogs/\nviewer_commands.sh" as REPORT
+
+User --> MAIN : python src/main.py --config ...
+MAIN --> IO : load_config()
+MAIN --> IO : open_video(), video_writer()
+
+MAIN --> POSE : infer(frame) [monocular]
+MAIN --> POSE : infer(left) [stereo]
+MAIN --> POSE : infer(right) [stereo]
+MAIN --> STEREO : triangulate() [stereo.enabled]
+MAIN --> FACE : infer(ROI/full frame) [if face.enabled]
+MAIN --> BODY : append_virtual_body_points() [if body_enrichment.enabled]
+
+MAIN --> SCAN : update() [V1/V2/V3]
+MAIN --> DRAW2D : draw_skeleton()
+MAIN --> DRAW3D : render()
+MAIN --> IO : write_keypoints_csv()
+MAIN --> IO : write_scan_metrics_csv()
+MAIN --> VID
+MAIN --> CSV
+
+User --> SUITE : run_report_suite.py
+SUITE --> MAIN : execute per version
+SUITE --> REPORT : write summary/logs/viewer commands
+User --> VIEWER : inspect keypoints + scanner states
+
+@enduml
+\end{lstlisting}
+
+\section{Pose Representation and Monocular 3D}
+The core pose representation is produced by \texttt{MediaPipePose.infer()} as a fixed tensor \(\mathbf{P}_t \in \mathbb{R}^{33 \times 4}\) for each frame \(t\), with columns \((x,y,z,v)\). In the default branch, \(x\) and \(y\) are stored in pixel coordinates and are computed from normalized detector outputs as \(x = \hat{x}\,W\) and \(y = \hat{y}\,H\), where \(W,H\) are frame width and height. The depth channel \(z\) is the model-relative depth signal returned by BlazePose and should therefore be interpreted as a relative geometric cue rather than an absolute metric distance. The visibility channel \(v\) is copied from MediaPipe landmark visibility and is used throughout the pipeline for rendering and scanner gating.
+
+An important implementation property is shape stability under failure. If no pose is detected in frame \(t\), the wrapper returns \(\mathbf{P}_t\) with the same \(33 \times 4\) shape but filled with \(\mathrm{NaN}\), and applies the same policy to dictionary outputs. This design guarantees that downstream steps can be executed uniformly for every frame without special-case branching. In practice, this is what allows continuous video writing, scanner updates, and CSV logging even during brief detection dropouts.
+
+The optional face stream follows the same contract pattern. \texttt{MediaPipeFaceMesh.infer()} returns \(\mathbf{F}_t \in \mathbb{R}^{N_f \times 4}\), where \(N_f=468\) in base mode or \(N_f=478\) with iris refinement enabled. Face points are also converted to pixel \(x,y\), include model-relative \(z\), and use \(v=1\) for detected landmarks because Face Mesh does not expose per-point visibility in the same way as Pose. In monocular operation without world-landmark output, pose and face are concatenated into a combined tensor \(\mathbf{X}_t=[\mathbf{P}_t;\mathbf{F}_t]\), which is then consumed by V2/V3 scanner logic and by the 3D stickman renderer.
+
+The pipeline can further append virtual body points via interpolation along MediaPipe pose connections. For segment endpoints \(\mathbf{p}_i,\mathbf{p}_j\) and subdivision index \(k\), the inserted point is computed as \(\mathbf{p}_{k}=(1-\tau)\mathbf{p}_i+\tau\mathbf{p}_j\), with \(\tau=\frac{k}{s+1}\) and visibility set to \(\min(v_i,v_j)\). If either endpoint is invalid, the inserted point is written as \(\mathrm{NaN}\), preserving deterministic output length and column order. This body-enrichment stage does not alter detector semantics; it increases representational density for visualization and downstream feature engineering.
+
+Monocular 3D support is implemented through MediaPipe \texttt{pose\_world\_landmarks}. When enabled, the pipeline uses \(\mathbf{P}^{world}_t \in \mathbb{R}^{33 \times 4}\) as the pose source whenever \texttt{world\_ok} is true, and can optionally fall back to the default relative representation when world landmarks are missing on a frame. If fallback is disabled, missing world frames are propagated as \(\mathrm{NaN}\). A deliberate consistency rule is enforced in this mode: face fusion is disabled in the main pipeline, because face \(z\) values and ROI-localized geometry are not guaranteed to be in the same coordinate frame as pose world landmarks. This avoids mixing incompatible depth frames in scanner and rendering inputs.
+
+Finally, export format mirrors these design decisions. Keypoints are written in long format as \((\texttt{frame},\texttt{landmark},x,y,z,\texttt{visibility})\), so each frame contains one row per landmark name in deterministic order. The result is a reproducible per-frame geometric record that supports direct visualization, scan analytics, and later dataset construction without post-hoc schema repair.
+
+\section{Visualization Pipeline}
+The visualization subsystem is implemented as a dual-view diagnostic stack rather than a single presentation layer. The first view is the 2D overlay on the original frame, drawn by \texttt{src/viz/draw\_skeleton.py}. It renders MediaPipe pose edges and joints directly in image space, but only for landmarks whose visibility exceeds a configurable threshold. This gives an immediate sanity check for detector stability, occlusion behavior, and gross tracking failures while preserving full scene context.
+
+The second view is a geometry-focused 3D stickman generated by \texttt{src/viz/stickman3d.py}. Before rendering, each frame is normalized around the body center so that camera translation does not dominate perceived motion. Let \(\mathbf{c}_t\) be the center estimated from hips and \(s_t\) be a body scale estimated from shoulder span (with hip span fallback). For each point \(\mathbf{p}_{t,i}\), the renderer uses
+\[
+\tilde{\mathbf{p}}_{t,i} = \frac{\mathbf{p}_{t,i}-\mathbf{c}_t}{s_t},
+\]
+followed by axis convention adjustments used for display (including vertical inversion in \(y\), and optional horizontal scaling in \(x\)). This normalization makes inter-frame motion visually interpretable across different distances to camera and supports consistent scanner HUD behavior.
+
+Rendering itself is performed with Matplotlib Agg for deterministic frame generation. The renderer clears and redraws each frame with fixed camera parameters (\texttt{elev}, \texttt{azim}), fixed axis limits, and configurable style parameters such as line width, joint size, color palette, and background. Only connections with sufficient visibility at both endpoints are drawn. When dense landmarks are present, the scatter size is automatically reduced to avoid visual saturation, which is especially important when Face Mesh and body-enrichment points are active.
+
+In the pipeline, scanner diagnostics are composited onto the stickman frame via a dedicated HUD function in \texttt{src/main.py}. This overlay writes scan count, normalized yaw, current state, and a threshold bar. For V3, thresholds and deadband can be drawn from adaptive values emitted by the scanner at runtime, so the visualization reflects the actual decision boundary used in that frame rather than only static config values.
+
+The output stage can write three synchronized video products: overlay-only, stickman-only, and side-by-side composite. Because the side-by-side writer stacks views after per-frame rendering, the resulting video acts as a direct temporal alignment tool: each frame shows what the detector saw in RGB and how that geometry was interpreted in normalized 3D at the same timestamp.
+
+The interactive viewer in \texttt{src/viewers/stickman\_viewer.py} extends this static-video workflow into an exploratory analysis tool. It reconstructs frame tensors from keypoints CSV, supports playback and frame stepping, and preserves free 3D rotation and zoom through Matplotlib controls. Crucially, it can instantiate the same V1/V2/V3 scanner classes and display their live internals over the recorded sequence, including transition text, candidate states, dwell progression, quality and calibration indicators, and threshold bars. This makes the viewer a post-hoc model inspection interface rather than only a visualizer.
+
+\subsection{PlantUML Sequence Diagram}
+The following PlantUML source describes the per-frame visualization and logging sequence in the monocular branch.
+
+\begin{lstlisting}
+@startuml
+title Per-frame Visualization and Logging Sequence (Monocular)
+skinparam shadowing false
+
+actor User
+participant "main.py" as MAIN
+participant "MediaPipePose" as POSE
+participant "MediaPipeFaceMesh" as FACE
+participant "draw_skeleton.py" as OVL
+participant "HeadScanner V1/V2/V3" as SCAN
+participant "Stickman3DRenderer" as STICK
+participant "utils/io.py" as IO
+
+User -> MAIN : run_pipeline(config)
+
+loop each frame t
+  MAIN -> POSE : infer(frame_bgr)
+  POSE --> MAIN : P_t, world flags
+
+  opt face.enabled and allowed
+    MAIN -> FACE : infer(frame_bgr, ROI/full frame)
+    FACE --> MAIN : F_t
+  end
+
+  MAIN -> MAIN : merge pose/face + optional body enrichment
+  MAIN -> SCAN : update(xyzv_t)
+  SCAN --> MAIN : yaw/state/count/diagnostics
+
+  MAIN -> OVL : draw_skeleton(frame, xyzv_dict)
+  MAIN -> STICK : render(xyzv_out)
+  STICK --> MAIN : stickman_rgb
+  MAIN -> MAIN : draw HUD (count, yaw, bars, thresholds)
+
+  MAIN -> IO : write overlay frame (optional)
+  MAIN -> IO : write stickman/composite frame (optional)
+  MAIN -> MAIN : append keypoint + metrics rows
+end
+
+MAIN -> IO : write_keypoints_csv()
+MAIN -> IO : write_scan_metrics_csv()
+
+@enduml
+\end{lstlisting}
+
+\section{Head-Scan Detection: Versioned Development}
+\subsection{Shared Event Logic}
+All scanner versions convert a continuous yaw proxy into a discrete three-state process \(\{\textit{left}, \textit{neutral}, \textit{right}\}\). The candidate-state rule is shared: if \(y_t > \theta_R\), candidate is \textit{right}; if \(y_t < \theta_L\), candidate is \textit{left}; if \(|y_t| < d\), candidate is \textit{neutral}; otherwise no candidate transition is proposed in that frame. This creates an intentional hysteresis zone between neutral and side thresholds. In V2 and V3, candidate transitions are additionally filtered by dwell logic, where a candidate must persist for a configured number of frames before the state is committed.
+
+The scanner outputs are intentionally diagnostic. Beyond count and state, newer versions expose internal terms such as raw and smoothed yaw, pending candidate state, dwell progress, face-point support, adaptive thresholds, quality, and event flags. This makes every counted event traceable to its decision path in both CSV logs and interactive visualization.
+
+\subsection{V1: Baseline Heuristic}
+V1 is a minimal image-axis heuristic designed as an interpretable baseline. It computes yaw from nose offset relative to shoulder midpoint, normalized by shoulder span:
+\[
+\text{yaw}_{v1} =
+\frac{x_{\text{nose}} - \frac{x_{L\_sh}+x_{R\_sh}}{2}}
+{|x_{L\_sh}-x_{R\_sh}|}.
+\]
+The update is accepted only when nose and both shoulders satisfy the visibility threshold. If the current yaw exceeds a side threshold, state is set to that side; if \(|\text{yaw}_{v1}|<d\), state returns to neutral. The counter increments whenever state changes into a side state. Because V1 uses no smoothing, no dwell, no refractory period, and no explicit quality model, it is sensitive to short spikes and viewpoint-induced torso confounds, but it provides a transparent lower bound for comparison.
+
+\subsection{V2: Compensated Multi-Cue Scanner}
+V2 introduces compensated yaw estimation and temporal stabilization. The head position is estimated from a visibility-weighted multi-point head proxy \(\{\text{nose},\text{eyes},\text{ears}\}\), and torso confounding is estimated from shoulder--hip geometry. The pose term is computed as
+\[
+\text{yaw}_{pose}=\text{head\_offset}-\lambda\cdot\text{torso\_offset},
+\]
+where \(\lambda\) is \texttt{torso\_weight}. Face support is optional and is computed from dense Face Mesh points by projecting facial \(x\)-distribution into a robust span using quantiles (\(q_{0.1},q_{0.9}\)); the nose reference comes from \texttt{face\_1} when available, otherwise from the weighted head proxy. When enough face points are valid, V2 blends cues as
+\[
+\text{yaw}_{v2}^{raw}=(1-\alpha_f)\,\text{yaw}_{pose}+\alpha_f\,\text{yaw}_{face},
+\]
+with \(\alpha_f=\texttt{face\_weight}\), then applies EMA smoothing with \(\texttt{smooth\_alpha}\).
+
+State transitions in V2 use a pending candidate and dwell counter. A new state is committed only if the same candidate persists for \(\texttt{dwell\_frames}\). Once committed, side entries increase the scan count. Compared with V1, this version reduces flicker and torso-induced false positives while preserving deterministic threshold behavior.
+
+\subsection{V3: Torso-Frame, Quality-Aware, Adaptive Scanner}
+V3 is the most robust implementation and uses a torso-centered 3D frame rather than pure image-axis offsets. With left/right shoulders \(\mathbf{s}_L,\mathbf{s}_R\), left/right hips \(\mathbf{h}_L,\mathbf{h}_R\), and weighted head point \(\mathbf{p}_{head}\), it builds a torso-right unit vector
+\[
+\mathbf{u}_{right}=\frac{\mathbf{s}_R-\mathbf{s}_L}{\|\mathbf{s}_R-\mathbf{s}_L\|},
+\]
+and defines pose yaw as the head displacement projected on \(\mathbf{u}_{right}\), normalized by shoulder span. Optional face yaw is computed in the same torso-right frame by projecting face landmarks onto \(\mathbf{u}_{right}\), using quantile span normalization, and blending with pose yaw via \texttt{face\_weight}. This frame-consistent projection is a key improvement over image-only formulations.
+
+V3 adds a quality model and stricter event semantics. Per-frame quality combines torso visibility, head visibility, shoulder--hip span consistency, face support, and short-term signal stability:
+\[
+q_t = 0.35\,q_{torso}+0.35\,q_{head}+0.15\,q_{span}+0.10\,q_{face}+0.05\,q_{stab}.
+\]
+Side transitions are permitted only when \(q_t\) exceeds \texttt{min\_quality}. State updates still use dwell filtering, but event counting is more selective than in V1/V2. A scan is counted only when all of the following hold simultaneously: transition is \(\textit{neutral}\rightarrow\textit{side}\), refractory condition is satisfied, and yaw exceeds side threshold by at least \texttt{min\_excursion}. This design prevents rapid duplicate counting and reduces noise-triggered events.
+
+V3 also supports adaptive threshold calibration during a warmup window. While uncalibrated, smoothed yaw samples are collected from sufficiently good-quality frames. After warmup, thresholds are set around empirical mean \(\mu\) with a sigma-based margin:
+\[
+\theta_R=\mu+\Delta,\quad \theta_L=\mu-\Delta,\quad
+\Delta=\max(k_\sigma \sigma,\theta_{min}),
+\]
+and deadband is updated from a sigma-scaled floor. In implementation, this is controlled by \texttt{adaptive\_sigma\_scale}, \texttt{adaptive\_min\_abs\_threshold}, \texttt{adaptive\_deadband\_scale}, and \texttt{adaptive\_min\_sigma}. The scanner exports \texttt{calibrated}, dynamic thresholds, \texttt{event}, and \texttt{event\_direction}, making each decision auditable at frame level.
+
+\subsection{Operational Modes in the Pipeline}
+At runtime, the pipeline can execute a single scanner mode (\texttt{v1}, \texttt{v2}, or \texttt{v3}) or comparison modes (\texttt{compare} for V1+V2 and \texttt{compare\_v2\_v3} for V2+V3). In comparison modes, all active scanners run on the same frame stream and write prefixed metrics columns to the same \texttt{scan\_metrics.csv}, enabling direct within-clip analysis without rerendering separate preprocessing steps.
+
+\section{Experiment Orchestration and Reproducibility}
+Controlled comparison is implemented through \texttt{src/tools/run\_report\_suite.py}, which turns a single base configuration into a full experiment matrix. Given a set of clips and scanner versions, the suite executes \(N_{\text{runs}} = N_{\text{clips}} \times N_{\text{versions}}\) pipeline runs. Each run receives a fully materialized configuration written to \texttt{[report\_dir]/configs/[clip]\_[mode].yaml}, so every output can be traced back to an explicit frozen parameter set rather than an implicit runtime state.
+
+The runner is deliberately opinionated for report consistency. It enforces monocular sweeps by setting \texttt{stereo.enabled=false} inside generated configs, enables overlay and stickman outputs, enables head-scan analytics, and rewires all output paths into a versioned report tree. For each \((\texttt{clip},\texttt{mode})\) pair, artifacts are written to \texttt{data/reports/[report]/[clip]/[mode]/} with standardized names: \texttt{overlay.mp4}, \texttt{stickman.mp4}, \texttt{side\_by\_side.mp4}, \texttt{keypoints.csv}, and \texttt{scan\_metrics.csv}. This path normalization is essential for downstream aggregation and for reproducible manuscript figures.
+
+Execution is logged per run in \texttt{[report\_dir]/logs/[clip]\_[mode].log}. The suite supports both buffered logging and live console streaming (\texttt{--live-output}) while always persisting complete logs on disk. Runtime status, return code, artifact paths, and optional evaluation metrics are aggregated into a single \texttt{summary.csv}. If a run fails, the suite records failure status and emits a tail of the log in the console, which shortens debugging feedback loops during batch experiments.
+
+Evaluation is integrated but conditional. When a ground-truth file \texttt{[clip][gt\_suffix]} exists in \texttt{--gt-dir}, the suite automatically loads predicted events from \texttt{scan\_metrics.csv}, loads GT events, and computes event-level metrics under configurable tolerance and optional direction-agnostic matching. If GT is absent, the run is still considered valid for artifact generation and is listed in \texttt{summary.csv} without precision/recall fields. This behavior is useful during iterative model development, where qualitative outputs often precede finalized annotation files.
+
+The suite also emits \texttt{viewer\_commands.sh}, a reproducibility convenience script that launches the interactive viewer for each successful run. The script explicitly changes into the repository root and exports \texttt{PYTHONPATH=src} before invoking viewer commands, preventing environment-dependent import failures. As a result, qualitative review sessions can be replayed from any shell context with a single command, preserving one-to-one correspondence between generated CSV artifacts and interactive diagnostics.
+
+\section{Evaluation Pipeline}
+Event-level scoring is implemented in \texttt{src/tools/evaluate\_scan\_events.py} and is designed to evaluate temporal detections rather than framewise classification. The evaluator first converts prediction CSV rows into event tuples \((f,\text{dir})\). When explicit event columns are present (\texttt{[prefix]\_event}, \texttt{[prefix]\_event\_direction}), those are used directly. For backward compatibility, if explicit event flags are absent, the script falls back to count-delta reconstruction: an event is emitted whenever \texttt{[prefix]\_count} increases between consecutive frames, and direction is taken from \texttt{[prefix]\_state}.
+
+Ground-truth loading supports two annotation styles. If a \texttt{frame} column exists, that frame index is used directly as event time. If span annotations are provided via \texttt{start\_frame} and \texttt{end\_frame}, the evaluator converts each span to a center frame. This keeps the scorer usable across both point-event and interval-event labeling workflows.
+
+Matching is performed with a one-to-one nearest-neighbor policy under tolerance. For each predicted event in time order, the evaluator searches unmatched GT events and selects the candidate with minimum absolute frame error \(|\Delta f|\) such that \(|\Delta f| \le \tau\), where \(\tau\) is \texttt{--tolerance-frames}. In direction-aware mode, left/right mismatches are disallowed when both labels are directional; in direction-agnostic mode this constraint is removed.
+
+From the matched set, the script reports \(TP\), \(FP\), \(FN\), Precision, Recall, and F1:
+\[
+P=\frac{TP}{TP+FP}, \quad
+R=\frac{TP}{TP+FN}, \quad
+F1=\frac{2PR}{P+R}.
+\]
+It also reports mean absolute frame error (MAE) over matched events. If no true positives are found, MAE is reported as unavailable. Optionally, a full match table can be exported via \texttt{--matches-csv}, which includes per-prediction match status and frame error for auditability.
+
+This evaluation setup is intentionally tolerance-based because scan events are temporal and annotation boundaries are inherently noisy. Using strict frame equality would penalize otherwise correct detections that are shifted by only a few frames, which is not meaningful for practical football behavior analysis.
+
+\section{Current Run Summary}
+The report run at \texttt{data/reports/final\_report\_run} contains three completed monocular sweeps for clip \texttt{test}: \texttt{v1}, \texttt{v2}, and \texttt{v3}. In \texttt{summary.csv}, all runs are marked \texttt{status=ok} with \texttt{return\_code=0}, and each row links to its frozen config, full log, and five core artifacts (\texttt{overlay.mp4}, \texttt{stickman.mp4}, \texttt{side\_by\_side.mp4}, \texttt{keypoints.csv}, \texttt{scan\_metrics.csv}).
+
+All three \texttt{scan\_metrics.csv} files contain 380 lines including header, corresponding to 379 processed frames (\(0\) through \(378\)). The final counter values at frame \(378\) are consistent across versions:
+\[
+\texttt{v1\_count}=2,\qquad
+\texttt{v2\_count}=2,\qquad
+\texttt{v3\_count}=2.
+\]
+This indicates that, on this clip, the three detector versions converge to the same final event count despite different internal decision logic.
+
+The per-version metric schemas reflect increasing model complexity. V1 logs only \texttt{yaw\_norm}, \texttt{state}, and \texttt{count}. V2 adds decomposed yaw terms, transition-candidate fields, dwell progress, and \texttt{face\_points}. V3 further adds \texttt{quality}, adaptive threshold outputs (\texttt{left\_threshold}, \texttt{right\_threshold}, \texttt{deadband}), calibration state, and explicit event flags (\texttt{event}, \texttt{event\_direction}).
+
+Ground-truth evaluation was configured to look for \texttt{data/processed/labels/test\_gt.csv}, but that file is not present in the current workspace snapshot. As a result, \texttt{summary.csv} contains run metadata only and does not include evaluation columns such as precision, recall, F1, TP, FP, or FN for this run.
+
+\section{Figure Placeholders for Final Manuscript}
+\begin{figure}[H]
+\centering
+\fbox{\parbox[c][5cm][c]{0.9\linewidth}{\centering Placeholder: system architecture and data-flow diagram.}}
+\caption{Overall architecture of the scan-analysis pipeline.}
+\label{fig:architecture}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\fbox{\parbox[c][5cm][c]{0.9\linewidth}{\centering Placeholder: V1 interactive viewer screenshot with yaw bar and state transition text.}}
+\caption{Interactive 3D viewer in V1 mode.}
+\label{fig:v1_viewer}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\fbox{\parbox[c][5cm][c]{0.9\linewidth}{\centering Placeholder: V2 interactive viewer screenshot with pose/face decomposition and candidate-state diagnostics.}}
+\caption{Interactive 3D viewer in V2 mode.}
+\label{fig:v2_viewer}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\fbox{\parbox[c][5cm][c]{0.9\linewidth}{\centering Placeholder: V3 interactive viewer screenshot with quality score, adaptive thresholds, and event markers.}}
+\caption{Interactive 3D viewer in V3 mode.}
+\label{fig:v3_viewer}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lccc}
+\toprule
+Metric & V1 & V2 & V3 \\
+\midrule
+Precision & [to be filled] & [to be filled] & [to be filled] \\
+Recall & [to be filled] & [to be filled] & [to be filled] \\
+F1 & [to be filled] & [to be filled] & [to be filled] \\
+MAE (frames) & [to be filled] & [to be filled] & [to be filled] \\
+\bottomrule
+\end{tabular}
+\caption{Quantitative comparison after ground-truth annotation.}
+\label{tab:quant_results}
+\end{table}
+
+\section{Limitations}
+The current implementation is technically complete for monocular scan detection experiments, but its strongest claims are still limited by evaluation coverage. In the present run snapshot, the expected ground-truth file for the test clip is not available, so the framework can produce reproducible artifacts and event logs but cannot yet report final precision--recall statistics for this clip. As a result, methodological comparisons between V1, V2, and V3 are currently stronger on explainability and diagnostic depth than on finalized quantitative evidence.
+
+A second limitation is geometric identifiability in monocular video. Even with \texttt{pose\_world\_landmarks}, depth remains inferred rather than triangulated, and viewpoint or scale ambiguities can still leak into head-yaw proxies under challenging camera angles, fast motion, or partial occlusion. This is particularly relevant when torso and head motions co-occur, because the model must separate true scan behavior from whole-body reorientation under imperfect depth observability.
+
+A third limitation is scope and operating assumptions in the current code path. The pipeline is effectively single-subject for each stream and does not include explicit identity tracking or multi-player disambiguation over time. Face-cue integration also depends on successful face visibility and, by design, is disabled when monocular world-landmark output is selected to avoid coordinate-frame mixing. These are sensible engineering choices for a robust MVP, but they constrain behavior in crowded scenes and in clips with small or weakly visible faces.
+
+Finally, the current scanner family remains heuristic and state-machine based. This is a strength for interpretability, but it also means decision boundaries are hand-parameterized and may require retuning across domains, camera setups, or annotation conventions. The adaptive calibration in V3 reduces this dependence, yet broader statistical validation across subjects and recording conditions is still required before claiming strong cross-context generalization. In addition, the project currently has limited automated unit and integration test coverage, so regression risk is controlled mainly through artifact inspection rather than formal CI checks.
+
+\section{Future Work}
+The immediate next milestone is to close the evaluation loop by completing clip-level annotations and running full V1/V2/V3 ablations with consistent tolerance settings. Once annotations are available, the report suite can be used to generate per-version precision, recall, F1, and timing-error summaries at scale, and to identify failure modes by linking metric outliers back to logs and interactive viewer diagnostics. This step will convert the current engineering evidence into statistically defensible comparative results.
+
+In the short term, methodological improvements should focus on temporal robustness and richer event semantics. One practical direction is to extend the current state machine with explicit scan-phase modeling, so that onset, apex, and return-to-neutral are represented separately rather than only as counted entries into side states. Another direction is to incorporate uncertainty-aware filtering from visibility and quality trajectories, allowing low-confidence regions to be treated differently in both counting and evaluation.
+
+A second development track is dataset protocol design for reproducible behavior research. The existing CSV and report-suite outputs already provide a strong foundation for this: future work can formalize annotation guidelines, include inter-annotator agreement checks, and store metadata about camera placement, player distance, and clip context. This would enable stratified evaluation rather than only global metrics, making it clearer where each scanner version succeeds or fails.
+
+Beyond monocular operation, the architecture is already positioned for sensing expansion. The stereo branch can be extended from current MVP triangulation to full synchronized multi-view studies with calibration quality controls and cross-view consistency checks. In that setting, scanner logic can be re-evaluated with stronger geometric ground truth, which would help quantify how much performance gain comes from model design (V1/V2/V3 logic) versus improved 3D observability.
+
+Tooling can also be advanced toward publication automation. Since the pipeline already writes standardized summary tables and per-run diagnostics, a natural extension is automated generation of manuscript-ready figures and LaTeX tables directly from run directories, reducing manual transfer errors and ensuring that reported numbers stay synchronized with underlying artifacts. Complementing this, a lightweight CI layer with synthetic test clips would provide automated regression checks for scanner outputs and CSV schema stability.
+
+\section{Conclusion}
+This independent study delivered a complete and executable pipeline for monocular scan-event analysis, from raw video ingestion to pose extraction, 3D visualization, event detection, artifact export, and reproducible experiment management. The system is modular at code level and auditable at output level: every run can be traced through frozen configs, logs, videos, and CSV diagnostics.
+
+Methodologically, the project progressed in a controlled sequence from V1 to V3. V1 established an interpretable baseline, V2 added torso compensation and temporal stabilization, and V3 introduced torso-frame 3D reasoning, quality-aware gating, adaptive thresholds, and explicit event-level diagnostics. This progression is important not only because it improves robustness, but because each improvement is testable within the same orchestration and evaluation framework.
+
+The current report run demonstrates full operational maturity of the tooling: all configured versions execute successfully and produce consistent artifacts suitable for qualitative and quantitative analysis. At the same time, the report is explicit about current evidence boundaries. Final comparative metrics are pending complete ground-truth availability for the evaluated clips. This is therefore a strong engineering and methodological foundation with partially completed statistical validation, not an over-claimed finished benchmark.
+
+Overall, the project now stands as a reproducible baseline platform for football scanning-behavior research. It is immediately usable for iterative model development, annotation-driven evaluation, and report generation, and it is structurally prepared for the next step toward larger datasets and stronger geometric supervision.
+
+\appendix
+\section{Reproducibility Commands}
+
+\subsection*{Run Versioned Suite}
+\begin{lstlisting}[style=bashstyle]
+cd /Users/andreasalexopoulos/Documents/Codeium/PitchPose
+PYTHONPATH=src ./.venv/bin/python src/tools/run_report_suite.py \
+  --base-config configs/mvp.yaml \
+  --inputs data/raw/test.mov \
+  --versions v1,v2,v3 \
+  --report-root data/reports \
+  --report-name final_report_run \
+  --gt-dir data/processed/labels \
+  --gt-suffix _gt.csv \
+  --tolerance-frames 5
+\end{lstlisting}
+
+\subsection*{Open Interactive Viewers}
+\begin{lstlisting}[style=bashstyle]
+bash data/reports/final_report_run/viewer_commands.sh
+\end{lstlisting}
+
+\subsection*{Evaluate a Single Version}
+\begin{lstlisting}[style=bashstyle]
+PYTHONPATH=src ./.venv/bin/python src/tools/evaluate_scan_events.py \
+  --pred-csv data/reports/final_report_run/test/v3/scan_metrics.csv \
+  --gt-csv data/processed/labels/test_gt.csv \
+  --prefix v3 \
+  --tolerance-frames 5
+\end{lstlisting}
+
+\end{document}

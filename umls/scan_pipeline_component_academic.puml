@@ -1,0 +1,30 @@
+@startuml
+title Monocular Scan-Event Analysis Pipeline (Component View)
+left to right direction
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam defaultTextAlignment center
+skinparam wrapWidth 220
+
+rectangle "Input Video\n(monocular football clip)" as Input
+
+rectangle "Pose Estimation\n(MediaPipe Pose)\n---\n33 landmarks\n(x, y, z, visibility)" as Pose
+
+rectangle "Approximate 3D Representation\n(pose_world_landmarks)" as Approx3D
+note bottom of Approx3D
+relative depth, not metric 3D
+end note
+
+rectangle "Scan-Event Detection\n(V1 / V2 / V3)\n---\nyaw estimation\ntemporal state machine\nleft / neutral / right" as Scan
+
+rectangle "Outputs\n- Overlay Video\n- 3D Stickman\n- Keypoints (CSV)\n- Scan Metrics" as Out
+
+rectangle "Interactive Viewer\n(Qualitative Analysis)" as Viewer
+
+Input --> Pose
+Pose --> Approx3D
+Approx3D --> Scan
+Scan --> Out
+Out -down-> Viewer
+
+@enduml

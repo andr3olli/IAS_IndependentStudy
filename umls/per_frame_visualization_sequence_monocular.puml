@@ -1,0 +1,42 @@
+@startuml
+title Per-frame Visualization and Logging Sequence (Monocular)
+skinparam shadowing false
+
+actor User
+participant "main.py" as MAIN
+participant "MediaPipePose" as POSE
+participant "MediaPipeFaceMesh" as FACE
+participant "draw_skeleton.py" as OVL
+participant "HeadScanner V1/V2/V3" as SCAN
+participant "Stickman3DRenderer" as STICK
+participant "utils/io.py" as IO
+
+User -> MAIN : run_pipeline(config)
+
+loop each frame t
+  MAIN -> POSE : infer(frame_bgr)
+  POSE --> MAIN : P_t, world flags
+
+  opt face.enabled and allowed
+    MAIN -> FACE : infer(frame_bgr, ROI/full frame)
+    FACE --> MAIN : F_t
+  end
+
+  MAIN -> MAIN : merge pose/face + optional body enrichment
+  MAIN -> SCAN : update(xyzv_t)
+  SCAN --> MAIN : yaw/state/count/diagnostics
+
+  MAIN -> OVL : draw_skeleton(frame, xyzv_dict)
+  MAIN -> STICK : render(xyzv_out)
+  STICK --> MAIN : stickman_rgb
+  MAIN -> MAIN : draw HUD (count, yaw, bars, thresholds)
+
+  MAIN -> IO : write overlay frame (optional)
+  MAIN -> IO : write stickman/composite frame (optional)
+  MAIN -> MAIN : append keypoint + metrics rows
+end
+
+MAIN -> IO : write_keypoints_csv()
+MAIN -> IO : write_scan_metrics_csv()
+
+@enduml

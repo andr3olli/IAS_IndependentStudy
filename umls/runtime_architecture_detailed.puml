@@ -1,0 +1,49 @@
+@startuml
+title PitchPose Runtime Architecture
+skinparam componentStyle rectangle
+skinparam shadowing false
+
+actor User
+artifact "configs/mvp.yaml" as CFG
+
+component "src/main.py\nrun_pipeline()" as MAIN
+component "src/utils/io.py\nload/open/write" as IO
+component "src/pose/mediapipe_pose.py" as POSE
+component "src/pose/mediapipe_face.py" as FACE
+component "src/pose/body_points.py" as BODY
+component "src/analytics/head_scan.py\nV1/V2/V3" as SCAN
+component "src/viz/draw_skeleton.py" as DRAW2D
+component "src/viz/stickman3d.py" as DRAW3D
+component "src/triangulation/stereo.py" as STEREO
+component "src/tools/run_report_suite.py" as SUITE
+component "src/viewers/stickman_viewer.py" as VIEWER
+
+database "overlay.mp4\nstickman.mp4\nside_by_side.mp4" as VID
+database "keypoints.csv\nscan_metrics.csv" as CSV
+database "summary.csv\nlogs/\nviewer_commands.sh" as REPORT
+
+User --> MAIN : python src/main.py --config ...
+MAIN --> IO : load_config()
+MAIN --> IO : open_video(), video_writer()
+
+MAIN --> POSE : infer(frame) [monocular]
+MAIN --> POSE : infer(left) [stereo]
+MAIN --> POSE : infer(right) [stereo]
+MAIN --> STEREO : triangulate() [stereo.enabled]
+MAIN --> FACE : infer(ROI/full frame) [if face.enabled]
+MAIN --> BODY : append_virtual_body_points() [if body_enrichment.enabled]
+
+MAIN --> SCAN : update() [V1/V2/V3]
+MAIN --> DRAW2D : draw_skeleton()
+MAIN --> DRAW3D : render()
+MAIN --> IO : write_keypoints_csv()
+MAIN --> IO : write_scan_metrics_csv()
+MAIN --> VID
+MAIN --> CSV
+
+User --> SUITE : run_report_suite.py
+SUITE --> MAIN : execute per version
+SUITE --> REPORT : write summary/logs/viewer commands
+User --> VIEWER : inspect keypoints + scanner states
+
+@enduml

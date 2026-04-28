@@ -1,0 +1,106 @@
+# Sample configuration for the baseline MediaPipe Pose pipeline.
+
+input_video: data/raw/test.mov
+overlay_video: data/overlays/test_skeleton.mp4
+keypoints_csv: data/processed/test_keypoints.csv
+
+monocular_3d:
+  enabled: false
+  # pose_world uses MediaPipe's monocular 3D lifting (world landmarks).
+  source: pose_world
+  # If world landmarks are missing on a frame, fallback to relative-z pose.
+  fallback_to_relative: true
+
+stereo:
+  enabled: false
+  left_video: data/raw/left.mp4
+  right_video: data/raw/right.mp4
+  calibration: configs/stereo_calibration.yaml
+  left_start_frame: 0
+  right_start_frame: 0
+  # Optional output fps override. If null, uses min(left_fps, right_fps).
+  fps:
+  min_visibility: 0.4
+  max_reprojection_error: 0.02
+
+pose:
+  model_complexity: 1
+  smooth_landmarks: true
+  enable_segmentation: false
+  static_image_mode: false
+
+face:
+  enabled: true
+  refine_landmarks: false   # more robust at smaller face scale
+  static_image_mode: true   # run face detection every frame
+  max_num_faces: 1
+  min_detection_confidence: 0.3
+  min_tracking_confidence: 0.3
+  use_pose_head_roi: true
+  fallback_full_frame: true
+  roi_min_visibility: 0.2
+  roi_min_size_px: 140
+  roi_pad_scale: 2.2
+
+body_enrichment:
+  enabled: true
+  subdivisions: 2  # virtual points per pose segment
+
+overlay:
+  enabled: true
+  write_video: true
+  visibility_threshold: 0.2
+
+analytics:
+  head_scan:
+    enabled: true
+    mode: v3  # v1 | v2 | v3 | compare | compare_v2_v3
+    right_threshold: 0.25
+    left_threshold: -0.25
+    deadband: 0.04
+    min_visibility: 0.5
+    torso_weight: 0.6
+    face_weight: 0.55
+    v3_use_face: true
+    v3_face_weight: 0.35
+    smooth_alpha: 0.25
+    dwell_frames: 2
+    refractory_frames: 10
+    min_excursion: 0.03
+    min_quality: 0.35
+    adaptive: true
+    warmup_frames: 45
+    adaptive_sigma_scale: 2.0
+    adaptive_deadband_scale: 0.5
+    adaptive_min_abs_threshold: 0.12
+    adaptive_min_sigma: 0.02
+    metrics_csv: data/processed/test_head_scan_metrics.csv
+    v1_text_color: [80, 210, 255]
+    v1_bar_color: [0, 165, 255]
+    v2_text_color: [0, 255, 170]
+    v2_bar_color: [0, 220, 120]
+    v3_text_color: [255, 220, 0]
+    v3_bar_color: [0, 220, 220]
+
+stickman:
+  enabled: true
+  video: data/overlays/test_stickman.mp4
+  composite_video: data/overlays/test_side_by_side.mp4
+  write_stickman_video: true
+  write_composite_video: true
+  visibility_threshold: 0.2
+  fig_size: [6.0, 6.0]
+  dpi: 300
+  elev: 5.0        # slight tilt so depth is visible
+  azim: -90.0      # face the subject head-on (Matplotlib azim -90 == -Y view)
+  axis_limits:
+    x: [-1.5, 1.5]
+    y: [-1.5, 1.5]
+    z: [-1.0, 1.0]
+  # Stretch x to combat horizontal compression (1.0 = no stretch)
+  x_scale: 0.75
+  line_width: 3.0
+  joint_size: 40.0
+  line_color: [0.9, 0.4, 0.1]
+  joint_color: [0.1, 0.8, 0.9]
+  background_color: [0.05, 0.05, 0.05]

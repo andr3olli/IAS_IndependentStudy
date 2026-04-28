@@ -1,0 +1,27 @@
+# Example stereo calibration file for true 3D triangulation.
+# Replace all values with your real calibrated parameters.
+#
+# Units:
+# - Intrinsics are in pixels.
+# - T is in your checkerboard square units (e.g., meters if square_size_m was in meters).
+
+left:
+  K:
+    - [1000.0, 0.0, 640.0]
+    - [0.0, 1000.0, 360.0]
+    - [0.0, 0.0, 1.0]
+  dist: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+right:
+  K:
+    - [1000.0, 0.0, 640.0]
+    - [0.0, 1000.0, 360.0]
+    - [0.0, 0.0, 1.0]
+  dist: [0.0, 0.0, 0.0, 0.0, 0.0]
+
+# Rotation and translation from left camera to right camera.
+R:
+  - [1.0, 0.0, 0.0]
+  - [0.0, 1.0, 0.0]
+  - [0.0, 0.0, 1.0]
+T: [0.2, 0.0, 0.0]

@@ -1,0 +1,23 @@
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+
+# Runtime outputs / datasets
+data/raw/
+data/overlays/
+data/processed/
+data/reports/
+
+# Keep the GT template committed
+!data/processed/
+!data/processed/labels/
+!data/processed/labels/gt_events_template.csv
+
+# LaTeX build outputs
+report/*.aux
+report/*.fdb_latexmk
+report/*.fls
+report/*.log
+report/*.out
+report/*.toc
